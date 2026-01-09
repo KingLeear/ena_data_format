@@ -4,8 +4,20 @@ import re
 import argparse
 from pathlib import Path
 from typing import List, Optional
-
+from transformers import TrainerCallback
 import pandas as pd
+
+
+# For progress bar in streamlit while training
+class StreamlitProgressCallback(TrainerCallback):
+    def __init__(self, total_steps, progress_bar):
+        self.total_steps = total_steps
+        self.progress_bar = progress_bar
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.total_steps > 0:
+            frac = min(state.global_step / self.total_steps, 1.0)
+            self.progress_bar.progress(frac)
 
 
 def detect_lang(text: str) -> str:
@@ -291,6 +303,7 @@ def step_train_multiclass(
     batch_size: int = 8,
     max_len: int = 128,
     seed: int = 42,
+    progress_bar=None
 ) -> None:
     from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
     from datasets import Dataset
@@ -333,7 +346,14 @@ def step_train_multiclass(
     train_ds = Dataset.from_pandas(train_df.reset_index(drop=True))
     val_ds = Dataset.from_pandas(val_df.reset_index(drop=True))
 
+
+    total_steps = (len(train_ds) // batch_size) * epochs
+
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    total_steps = (len(train_ds) // batch_size) * epochs
+
 
     def tok(batch):
         return tokenizer(batch["text"], truncation=True, padding="max_length", max_length=max_len)
@@ -363,20 +383,41 @@ def step_train_multiclass(
         seed=seed,
     )
 
+    callbacks = []
+    if progress_bar is not None:
+        from ena_tool import StreamlitProgressCallback  
+        callbacks.append(StreamlitProgressCallback(total_steps, progress_bar))
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         tokenizer=tokenizer,
-        compute_metrics=compute_metrics,  
+        compute_metrics=compute_metrics,
+        callbacks=callbacks,
     )
+        
+    
 
-    trainer.train()
+    train_result = trainer.train()
+    eval_metrics = trainer.evaluate()
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     trainer.save_model(str(out_dir))
     tokenizer.save_pretrained(str(out_dir))
 
+    metrics = {}
+    metrics.update(train_result.metrics)
+    metrics.update(eval_metrics)   
+
+    return metrics
+    
+
     print(f"Saved model to {out_dir}")
+    return train_result.metrics
 
 ########Classify Test Predict#######################################
 
