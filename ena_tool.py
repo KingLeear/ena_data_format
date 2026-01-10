@@ -9,58 +9,66 @@ import pandas as pd
 
 
 # For progress bar in streamlit while training
+# Each time a training step ends, update the progress bar
 class StreamlitProgressCallback(TrainerCallback):
     def __init__(self, total_steps, progress_bar):
-        self.total_steps = total_steps
+        self.total_steps = max(int(total_steps or 0), 0)
         self.progress_bar = progress_bar
 
     def on_step_end(self, args, state, control, **kwargs):
-        if self.total_steps > 0:
-            frac = min(state.global_step / self.total_steps, 1.0)
-            self.progress_bar.progress(frac)
+        if not self.progress_bar or self.total_steps <= 0:
+            return
+        frac = min(state.global_step / self.total_steps, 1.0)
+        self.progress_bar.progress(frac)
 
 
 def detect_lang(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return "en"
+
     zh_chars = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    en_chars = sum(1 for ch in text if "a" <= ch.lower() <= "z")
+    en_chars = sum(1 for ch in text if ("a" <= ch.lower() <= "z"))
+
     if zh_chars == 0 and en_chars == 0:
         return "en"
     return "zh" if zh_chars >= en_chars else "en"
 
 
-def split_zh_sentences(
-    text: Optional[str],
-    min_len: int = 8,
-) -> List[str]:
+
+# Add some sanity checks for text column
+def assert_has_usable_text(df: pd.DataFrame, text_col: str) -> None:
+    if text_col not in df.columns:
+        raise KeyError(f"Column '{text_col}' not found in dataframe.")
+
+    s = df[text_col].dropna().astype(str).str.strip()
+    if s.empty or s.eq("").all() or s.str.lower().eq("nan").all():
+        raise ValueError(f"Column '{text_col}' exists but contains no usable text.")
+
+
+def split_zh_sentences(text: Optional[str], min_len: int = 8) -> List[str]:
     if text is None:
         return []
     text = str(text).strip()
     if not text or text.lower() == "nan":
         return []
 
-    # Chinese sentence splitting
     sents = re.split(r"[。！？；…]\s*|\n+", text)
     sents = [s.strip() for s in sents if s and s.strip()]
 
-    # adjustable, filter by min length
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
-        return sents
 
-
-## another check, stop if no usable text
-    if df[text_col].dropna().astype(str).str.strip().eq("").all():
-        print(f"[STOP] Column '{text_col}' exists but contains no usable text.")
-    return
+    return sents
 
 
 def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
-    # this is now the default simple English sentence splitter
     if text is None:
         return []
     t = str(text).strip()
     if not t or t.lower() == "nan":
         return []
+
     t = re.sub(r"\s+", " ", t)
 
     abbr = r"(Mr|Ms|Mrs|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e)\."
@@ -71,7 +79,10 @@ def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
 
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
-        return sents
+
+    return sents
+
+
 
 def segment_csv(
     in_csv: Path,
@@ -84,6 +95,7 @@ def segment_csv(
     min_len_en: int,
 ) -> None:
     df = pd.read_csv(in_csv)
+    assert_has_usable_text(df, text_col)
 
     # 1) handle duplicated columns
     if df.columns.duplicated().any():
@@ -141,15 +153,6 @@ def segment_csv(
     print("DEBUG segments head:", df["_segments"].head(3).tolist())
     print("DEBUG non-empty segments:", sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
 
-# print("DEBUG: sample text values:")
-# print(df[text_col].head(5).to_list())
-
-# print("DEBUG: segments head:")
-# print(df["_segments"].head(5).to_list())
-
-# print("DEBUG: how many non-empty segments:",
-#       sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
-
     # 5) explode
     cols = []
     for c in (id_cols + ([group_col] if group_col else []) + [row_id_col, text_col, "_segments"]):
@@ -204,9 +207,9 @@ def segment_csv(
     df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
 
+## Code Review above this line #############################################
 
-
-######Paradigms and API#####################################################
+###### Paradigms and API #####################################################
 
 # test_paradigms.py
 from pathlib import Path
