@@ -14,9 +14,8 @@ from ena_tool import (
 st.set_page_config(page_title="ENA Pipeline", layout="wide")
 st.title("ENA End-to-End Pipeline")
 
-# ----------------------------
 # OpenAI API Key input
-# ----------------------------
+# TODO(self): Refactor API key handling to use session_state (avoid os.environ)
 st.sidebar.header("Input OpenAI API Key")
 
 openai_api_key = st.sidebar.text_input(
@@ -32,9 +31,8 @@ if openai_api_key:
 else:
     st.sidebar.warning("No API key set. Paradigm generation will not work.")
 
-# ----------------------------
 # 0) Session state for concepts
-# ----------------------------
+
 if "concepts" not in st.session_state:
     st.session_state["concepts"] = [
         {"code": "C1", "label": "Concept 1", "definition": ""},
@@ -45,43 +43,7 @@ st.write("Define concept labels → generate paradigms → train model → uploa
 
 st.divider()
 
-# ----------------------------
-# 1) Concept / Label editor
-# ----------------------------
-# st.header("1.Define concept labels (multiclass)")
 
-# with st.expander("Edit concepts", expanded=True):
-#     cols_header = st.columns([1, 2, 3, 1])
-#     cols_header[0].markdown("**Code**")
-#     cols_header[1].markdown("**Label**")
-#     cols_header[2].markdown("**Definition**")
-#     cols_header[3].markdown("**Remove**")
-
-#     for i, c in enumerate(st.session_state["concepts"]):
-#         cols = st.columns([1, 2, 3, 1])
-#         c["code"] = cols[0].text_input("", value=c.get("code", ""), key=f"code_{i}")
-#         c["label"] = cols[1].text_input("", value=c.get("label", ""), key=f"label_{i}")
-#         c["definition"] = cols[2].text_area("", value=c.get("definition", ""), key=f"def_{i}", height=80)
-#         if cols[3].button("Remove", key=f"del_{i}"):
-#             st.session_state["concepts"].pop(i)
-#             st.rerun()
-
-#     c1, c2 = st.columns([1, 3])
-#     if c1.button("Add concept"):
-#         st.session_state["concepts"].append({"code": "", "label": "", "definition": ""})
-#         st.rerun()
-
-# # Validate concepts
-# def _validate_concepts(concepts: list[dict]) -> list[str]:
-#     errs = []
-#     codes = [c.get("code", "").strip() for c in concepts]
-#     if any(not x for x in codes):
-#         errs.append("Some concept codes are empty.")
-#     if len(set(codes)) != len(codes):
-#         errs.append("Duplicate concept codes detected.")
-#     return errs
-
-# st.divider()
 st.header("1. Define concept labels (multiclass)")
 
 # init
@@ -179,9 +141,8 @@ with st.expander("Optional: manually tweak concepts", expanded=False):
             c["label"] = cols[1].text_input("label", value=c.get("label", ""), key=f"label_{i}")
             c["definition"] = cols[2].text_area("definition", value=c.get("definition", ""), key=f"def_{i}", height=80)
 
-# ----------------------------
+
 # 2) Generate paradigms + train model
-# ----------------------------
 st.header("2. Generate paradigms and train model")
 
 
