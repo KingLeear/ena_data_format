@@ -95,7 +95,7 @@ def segment_csv(
     min_len_en: int,
 ) -> None:
     df = pd.read_csv(in_csv)
-    assert_has_usable_text(df, text_col)
+    # assert_has_usable_text(df, text_col)
 
     # 1) handle duplicated columns
     if df.columns.duplicated().any():
@@ -110,6 +110,18 @@ def segment_csv(
                 new_cols.append(f"{c}__dup{counts[c]}")
         df.columns = new_cols
 
+        # check required columns before using the text_col
+    required_cols = [text_col, *id_cols]
+    if group_col:
+        required_cols.append(group_col)
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"CSV missing columns: {missing}. Existing columns: {list(df.columns)}"
+        )
+    
+    assert_has_usable_text(df, text_col)
+
     # 2) use row_id as unique row identifier
     if "__row_id" in df.columns:
 
@@ -117,16 +129,6 @@ def segment_csv(
     df = df.reset_index(drop=False).rename(columns={"index": "__row_id"})
     row_id_col = "__row_id"
 
-    # 3) check the required columns
-    required_cols = [text_col, *id_cols]
-    if group_col:
-        required_cols.append(group_col)
-
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"CSV missing columns: {missing}. Existing columns: {list(df.columns)}"
-        )
 
     # 4) segmentation
     def _segment_row(x):
@@ -143,7 +145,9 @@ def segment_csv(
         else:
             segs = split_en_sentences(t, min_len=min_len_en)
 
-        print("DEBUG segments:", segs)
+        if debug:
+            print(f"DEBUG row_id={x[row_id_col]} lang={l} segments:", segs)
+
         return segs
 
     df["_segments"] = df.apply(_segment_row, axis=1)
@@ -173,13 +177,10 @@ def segment_csv(
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if df_seg.empty:
-        print("[STOP] Segmentation produced 0 units.")
-        print("       Check your column name, language, or min_len settings.")
-        df_seg = pd.DataFrame(columns=cols[:-1] + ["text"])  # replace _segments with text
-
-    df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
-    print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
-    return
+        df_seg = pd.DataFrame(columns=[c for c in cols if c!= "_segments"] + ["text"])
+        df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
+        return
 
     # 6) filter the length
     if lang == "auto":
@@ -192,9 +193,8 @@ def segment_csv(
         df_seg["segment_id"] = df_seg.groupby(group_col).cumcount() + 1
     else:
         df_seg["segment_id"] = range(1, len(df_seg) + 1)
+        speaker_key = id_cols[0]
 
-    # 8) unit_id 
-    speaker_key = group_col if group_col else id_cols[0]
     df_seg["unit_id"] = (
         df_seg[speaker_key].astype(str)
         + "_"
@@ -207,7 +207,6 @@ def segment_csv(
     df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
 
-## Code Review above this line #############################################
 
 ###### Paradigms and API #####################################################
 
@@ -216,7 +215,6 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from dataclasses import dataclass
-# from openai import OpenAI
 
 @dataclass
 class Concept:
