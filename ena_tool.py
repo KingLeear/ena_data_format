@@ -145,8 +145,8 @@ def segment_csv(
         else:
             segs = split_en_sentences(t, min_len=min_len_en)
 
-        if debug:
-            print(f"DEBUG row_id={x[row_id_col]} lang={l} segments:", segs)
+        # if debug:
+        #     print(f"DEBUG row_id={x[row_id_col]} lang={l} segments:", segs)
 
         return segs
 
@@ -189,12 +189,12 @@ def segment_csv(
         df_seg["lang"] = lang
 
     # 7) segment_id, grouping by group_col if provided
+    speaker_key = id_cols[0]
     if group_col:
         df_seg["segment_id"] = df_seg.groupby(group_col).cumcount() + 1
     else:
         df_seg["segment_id"] = range(1, len(df_seg) + 1)
-        speaker_key = id_cols[0]
-
+       
     df_seg["unit_id"] = (
         df_seg[speaker_key].astype(str)
         + "_"

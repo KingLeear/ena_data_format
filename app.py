@@ -252,7 +252,7 @@ if raw_file is not None:
         tmp_pred  = Path("data/_tmp_pred.csv")
         tmp_ena   = Path("data/_tmp_ena.csv")
 
-        # ===== Params =====
+        # Params 
         min_len_zh = 2
         min_len_en = 1
         pred_text_col = "text"
@@ -261,7 +261,7 @@ if raw_file is not None:
         st.write("CWD =", os.getcwd())
         st.write("Paths:", str(tmp_raw.resolve()), str(tmp_units.resolve()), str(tmp_pred.resolve()), str(tmp_ena.resolve()))
 
-        # ===== Step 1: Write raw =====
+        # Step 1: Write raw 
         tmp_raw.parent.mkdir(parents=True, exist_ok=True)
         raw_df.to_csv(tmp_raw, index=False, encoding="utf-8-sig")
         st.success(f"Step 1 OK: wrote raw -> {tmp_raw} ({len(raw_df)} rows)")
@@ -274,7 +274,7 @@ if raw_file is not None:
             st.error(f"text_col '{text_col}' is empty for all rows.")
             st.stop()
 
-        # ===== Step 2: Segmentation =====
+        # Step 2: Segmentation 
         with st.spinner("Step 2: Segmenting text..."):
             try:
                 segment_csv(
@@ -308,7 +308,7 @@ if raw_file is not None:
             st.error(f"Units missing '{pred_text_col}' column. Existing: {list(df_units.columns)}")
             st.stop()
 
-        # ===== Step 3: Prediction =====
+        # Step 3: Prediction 
         with st.spinner("Step 3: Predicting concepts..."):
             try:
                 step_predict_multiclass(
@@ -334,14 +334,26 @@ if raw_file is not None:
             st.error(f"No probability columns found with prefix '{prob_prefix}'.")
             st.stop()
 
-        # ===== Step 4: Binarize for ENA =====
+        #  Step 4: Binarize for ENA 
         with st.spinner("Step 4: Binarizing for ENA..."):
             try:
+                DESIRED_KEEP = [
+                    "essay_id_comp",
+                    "discourse_text",
+                    "__row_id",
+                    "text",
+                    "lang",
+                    "segment_id",
+                    "unit_id",
+                ]
+
+                keep = [c for c in DESIRED_KEEP if c in df_pred.columns]
+
                 step_binarize_ena(
                     in_csv=tmp_pred,
                     out_csv=tmp_ena,
-                    keep_cols=[c for c in ["student_id", "__row_id", pred_text_col] if c in df_pred.columns],
-                    mode=mode,                  
+                    keep_cols=keep,
+                    mode=mode,
                     threshold=float(threshold),
                     prob_prefix=prob_prefix,
                 )
