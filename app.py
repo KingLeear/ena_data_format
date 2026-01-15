@@ -222,6 +222,14 @@ st.divider()
 # ----------------------------
 # 3) Upload raw data + run full pipeline
 # ----------------------------
+if "pred_ready" not in st.session_state:
+    st.session_state.pred_ready = False
+if "tmp_pred" not in st.session_state:
+    st.session_state.tmp_pred = None
+if "tmp_ena" not in st.session_state:
+    st.session_state.tmp_ena = None
+if "prob_prefix" not in st.session_state:
+    st.session_state.prob_prefix = "p_"
 
 st.header("3. Upload raw data and run full pipeline")
 
@@ -286,6 +294,8 @@ if raw_file is not None:
                     lang=seg_lang,
                     min_len_zh=min_len_zh,
                     min_len_en=min_len_en,
+                    keep_cols=None, 
+
                 )
             except Exception as e:
                 st.error(f"Segmentation failed: {e}")
@@ -334,32 +344,51 @@ if raw_file is not None:
             st.error(f"No probability columns found with prefix '{prob_prefix}'.")
             st.stop()
 
-        #  Step 4: Binarize for ENA 
+
+        # Step 3 done
+        st.session_state.pred_ready = True
+        st.session_state.tmp_pred = str(tmp_pred)
+        st.session_state.tmp_ena  = str(tmp_ena)
+        st.session_state.prob_prefix = prob_prefix
+        st.success("Step 3 OK. Now select columns for Step 4 below.")
+
+        
+
+       # Step 4 UI & Run (outside the "Run full pipeline" button) 
+if st.session_state.pred_ready and st.session_state.tmp_pred:
+    tmp_pred = Path(st.session_state.tmp_pred)
+    tmp_ena  = Path(st.session_state.tmp_ena)
+    prob_prefix = st.session_state.prob_prefix
+
+    df_pred = pd.read_csv(tmp_pred)
+
+    st.subheader("Step 4: Binarize for ENA")
+    prob_cols = [c for c in df_pred.columns if c.startswith(prob_prefix)]
+    candidate_keep = [c for c in df_pred.columns if c not in prob_cols]
+
+    with st.form("ena_keepcols_form"):
+        keep_cols = st.multiselect(
+            "Keep columns in _tmp_ena.csv",
+            options=candidate_keep,
+            default=[],
+            help="Select columns to retain in the final ENA-coded output CSV.",
+        )
+        run_step4 = st.form_submit_button("Run Step 4: Binarize for ENA")
+
+    if run_step4:
+        if not keep_cols:
+            st.error("Please select at least one column to keep.")
+            st.stop()
+
         with st.spinner("Step 4: Binarizing for ENA..."):
-            try:
-                DESIRED_KEEP = [
-                    "essay_id_comp",
-                    "discourse_text",
-                    "__row_id",
-                    "text",
-                    "lang",
-                    "segment_id",
-                    "unit_id",
-                ]
-
-                keep = [c for c in DESIRED_KEEP if c in df_pred.columns]
-
-                step_binarize_ena(
-                    in_csv=tmp_pred,
-                    out_csv=tmp_ena,
-                    keep_cols=keep,
-                    mode=mode,
-                    threshold=float(threshold),
-                    prob_prefix=prob_prefix,
-                )
-            except Exception as e:
-                st.error(f"ENA binarization failed: {e}")
-                st.stop()
+            step_binarize_ena(
+                in_csv=tmp_pred,
+                out_csv=tmp_ena,
+                keep_cols=keep_cols,
+                mode=mode,
+                threshold=float(threshold),
+                prob_prefix=prob_prefix,
+            )
 
         if not tmp_ena.exists():
             st.error("ENA binarization finished but tmp_ena was not created.")
@@ -375,3 +404,5 @@ if raw_file is not None:
             file_name="ena_output.csv",
             mime="text/csv",
         )
+else:
+    st.info("Run full pipeline first. After Step 3 completes, Step 4 will appear here.")

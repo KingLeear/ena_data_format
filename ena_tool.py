@@ -93,6 +93,7 @@ def segment_csv(
     lang: str,
     min_len_zh: int,
     min_len_en: int,
+    keep_cols: Optional[List[str]] = None,
 ) -> None:
     df = pd.read_csv(in_csv)
     # assert_has_usable_text(df, text_col)
@@ -158,10 +159,21 @@ def segment_csv(
     print("DEBUG non-empty segments:", sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
 
     # 5) explode
-    cols = []
-    for c in (id_cols + ([group_col] if group_col else []) + [row_id_col, text_col, "_segments"]):
-        if c and c not in cols:
-            cols.append(c)
+    # 要保留的 meta 欄位：使用者選的 + 必需欄位
+    base_must = [text_col, *id_cols]
+    if group_col:
+        base_must.append(group_col)
+
+    # keep_cols=None → 保留全部欄位（最保險）
+    if keep_cols is None:
+        meta_cols = list(df.columns)
+    else:
+        # 只保留使用者選到且存在的欄位 + 必需欄位
+        wish = list(dict.fromkeys(keep_cols + base_must))  # 去重保序
+        meta_cols = [c for c in wish if c in df.columns]
+
+    # 一定要帶上 row_id 與 _segments
+    cols = list(dict.fromkeys(meta_cols + [row_id_col, "_segments"]))
 
     df_seg = (
         df[cols]
@@ -488,8 +500,14 @@ def step_predict_multiclass(
         return
     
 
+    code2label = label_map.get("code2label", {})  # e.g., {"C1": "claim", ...}
+
+    def clean(s: str) -> str:
+        return str(s).strip().replace(" ", "_")
+
     for idx, code in id2code.items():
-        df[f"p_{code}"] = probs[:, idx]
+        label = code2label.get(code, code)  
+        df[f"p_{clean(label)}"] = probs[:, idx]
 
 
     out_csv = Path(out_csv)
@@ -532,7 +550,17 @@ def step_binarize_ena(
     else:
         raise ValueError("mode must be one of: top1, threshold")
 
-    concept_cols = [c.replace(prob_prefix, "", 1) for c in prob_cols]
+    import json
+    label_map_path = Path(in_csv).parent / "label_map.json"
+    code2label = {}
+    if label_map_path.exists():
+        lm = json.loads(label_map_path.read_text(encoding="utf-8"))
+        code2label = lm.get("code2label", {})
+
+    concept_cols = [
+        code2label.get(c.replace(prob_prefix, "", 1), c.replace(prob_prefix, "", 1))
+        for c in prob_cols
+    ]
     coded_df = pd.DataFrame(coded, columns=concept_cols)
 
     out_df = pd.concat([df[keep_cols].reset_index(drop=True), coded_df.reset_index(drop=True)], axis=1)
