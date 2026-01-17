@@ -9,58 +9,66 @@ import pandas as pd
 
 
 # For progress bar in streamlit while training
+# Each time a training step ends, update the progress bar
 class StreamlitProgressCallback(TrainerCallback):
     def __init__(self, total_steps, progress_bar):
-        self.total_steps = total_steps
+        self.total_steps = max(int(total_steps or 0), 0)
         self.progress_bar = progress_bar
 
     def on_step_end(self, args, state, control, **kwargs):
-        if self.total_steps > 0:
-            frac = min(state.global_step / self.total_steps, 1.0)
-            self.progress_bar.progress(frac)
+        if not self.progress_bar or self.total_steps <= 0:
+            return
+        frac = min(state.global_step / self.total_steps, 1.0)
+        self.progress_bar.progress(frac)
 
 
 def detect_lang(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return "en"
+
     zh_chars = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    en_chars = sum(1 for ch in text if "a" <= ch.lower() <= "z")
+    en_chars = sum(1 for ch in text if ("a" <= ch.lower() <= "z"))
+
     if zh_chars == 0 and en_chars == 0:
         return "en"
     return "zh" if zh_chars >= en_chars else "en"
 
 
-def split_zh_sentences(
-    text: Optional[str],
-    min_len: int = 8,
-) -> List[str]:
+
+# Add some sanity checks for text column
+def assert_has_usable_text(df: pd.DataFrame, text_col: str) -> None:
+    if text_col not in df.columns:
+        raise KeyError(f"Column '{text_col}' not found in dataframe.")
+
+    s = df[text_col].dropna().astype(str).str.strip()
+    if s.empty or s.eq("").all() or s.str.lower().eq("nan").all():
+        raise ValueError(f"Column '{text_col}' exists but contains no usable text.")
+
+
+def split_zh_sentences(text: Optional[str], min_len: int = 8) -> List[str]:
     if text is None:
         return []
     text = str(text).strip()
     if not text or text.lower() == "nan":
         return []
 
-    # Chinese sentence splitting
     sents = re.split(r"[。！？；…]\s*|\n+", text)
     sents = [s.strip() for s in sents if s and s.strip()]
 
-    # adjustable, filter by min length
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
-        return sents
 
-
-## another check, stop if no usable text
-    if df[text_col].dropna().astype(str).str.strip().eq("").all():
-        print(f"[STOP] Column '{text_col}' exists but contains no usable text.")
-    return
+    return sents
 
 
 def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
-    # this is now the default simple English sentence splitter
     if text is None:
         return []
     t = str(text).strip()
     if not t or t.lower() == "nan":
         return []
+
     t = re.sub(r"\s+", " ", t)
 
     abbr = r"(Mr|Ms|Mrs|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e)\."
@@ -71,7 +79,10 @@ def split_en_sentences(text: Optional[str], min_len: int = 1) -> List[str]:
 
     if min_len and min_len > 0:
         sents = [s for s in sents if len(s) >= min_len]
-        return sents
+
+    return sents
+
+
 
 def segment_csv(
     in_csv: Path,
@@ -82,8 +93,10 @@ def segment_csv(
     lang: str,
     min_len_zh: int,
     min_len_en: int,
+    keep_cols: Optional[List[str]] = None,
 ) -> None:
     df = pd.read_csv(in_csv)
+    # assert_has_usable_text(df, text_col)
 
     # 1) handle duplicated columns
     if df.columns.duplicated().any():
@@ -98,6 +111,18 @@ def segment_csv(
                 new_cols.append(f"{c}__dup{counts[c]}")
         df.columns = new_cols
 
+        # check required columns before using the text_col
+    required_cols = [text_col, *id_cols]
+    if group_col:
+        required_cols.append(group_col)
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"CSV missing columns: {missing}. Existing columns: {list(df.columns)}"
+        )
+    
+    assert_has_usable_text(df, text_col)
+
     # 2) use row_id as unique row identifier
     if "__row_id" in df.columns:
 
@@ -105,16 +130,6 @@ def segment_csv(
     df = df.reset_index(drop=False).rename(columns={"index": "__row_id"})
     row_id_col = "__row_id"
 
-    # 3) check the required columns
-    required_cols = [text_col, *id_cols]
-    if group_col:
-        required_cols.append(group_col)
-
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"CSV missing columns: {missing}. Existing columns: {list(df.columns)}"
-        )
 
     # 4) segmentation
     def _segment_row(x):
@@ -131,7 +146,9 @@ def segment_csv(
         else:
             segs = split_en_sentences(t, min_len=min_len_en)
 
-        print("DEBUG segments:", segs)
+        # if debug:
+        #     print(f"DEBUG row_id={x[row_id_col]} lang={l} segments:", segs)
+
         return segs
 
     df["_segments"] = df.apply(_segment_row, axis=1)
@@ -141,20 +158,22 @@ def segment_csv(
     print("DEBUG segments head:", df["_segments"].head(3).tolist())
     print("DEBUG non-empty segments:", sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
 
-# print("DEBUG: sample text values:")
-# print(df[text_col].head(5).to_list())
-
-# print("DEBUG: segments head:")
-# print(df["_segments"].head(5).to_list())
-
-# print("DEBUG: how many non-empty segments:",
-#       sum(bool(s) for s in df["_segments"] if isinstance(s, list)))
-
     # 5) explode
-    cols = []
-    for c in (id_cols + ([group_col] if group_col else []) + [row_id_col, text_col, "_segments"]):
-        if c and c not in cols:
-            cols.append(c)
+    # 要保留的 meta 欄位：使用者選的 + 必需欄位
+    base_must = [text_col, *id_cols]
+    if group_col:
+        base_must.append(group_col)
+
+    # keep_cols=None → 保留全部欄位（最保險）
+    if keep_cols is None:
+        meta_cols = list(df.columns)
+    else:
+        # 只保留使用者選到且存在的欄位 + 必需欄位
+        wish = list(dict.fromkeys(keep_cols + base_must))  # 去重保序
+        meta_cols = [c for c in wish if c in df.columns]
+
+    # 一定要帶上 row_id 與 _segments
+    cols = list(dict.fromkeys(meta_cols + [row_id_col, "_segments"]))
 
     df_seg = (
         df[cols]
@@ -170,13 +189,10 @@ def segment_csv(
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if df_seg.empty:
-        print("[STOP] Segmentation produced 0 units.")
-        print("       Check your column name, language, or min_len settings.")
-        df_seg = pd.DataFrame(columns=cols[:-1] + ["text"])  # replace _segments with text
-
-    df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
-    print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
-    return
+        df_seg = pd.DataFrame(columns=[c for c in cols if c!= "_segments"] + ["text"])
+        df_seg.to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"Wrote segmented units: {out_csv} ({len(df_seg)} rows)")
+        return
 
     # 6) filter the length
     if lang == "auto":
@@ -185,13 +201,12 @@ def segment_csv(
         df_seg["lang"] = lang
 
     # 7) segment_id, grouping by group_col if provided
+    speaker_key = id_cols[0]
     if group_col:
         df_seg["segment_id"] = df_seg.groupby(group_col).cumcount() + 1
     else:
         df_seg["segment_id"] = range(1, len(df_seg) + 1)
-
-    # 8) unit_id 
-    speaker_key = group_col if group_col else id_cols[0]
+       
     df_seg["unit_id"] = (
         df_seg[speaker_key].astype(str)
         + "_"
@@ -205,15 +220,13 @@ def segment_csv(
 
 
 
-
-######Paradigms and API#####################################################
+###### Paradigms and API #####################################################
 
 # test_paradigms.py
 from pathlib import Path
 import pandas as pd
 import yaml
 from dataclasses import dataclass
-# from openai import OpenAI
 
 @dataclass
 class Concept:
@@ -487,8 +500,14 @@ def step_predict_multiclass(
         return
     
 
+    code2label = label_map.get("code2label", {})  # e.g., {"C1": "claim", ...}
+
+    def clean(s: str) -> str:
+        return str(s).strip().replace(" ", "_")
+
     for idx, code in id2code.items():
-        df[f"p_{code}"] = probs[:, idx]
+        label = code2label.get(code, code)  
+        df[f"p_{clean(label)}"] = probs[:, idx]
 
 
     out_csv = Path(out_csv)
@@ -531,7 +550,17 @@ def step_binarize_ena(
     else:
         raise ValueError("mode must be one of: top1, threshold")
 
-    concept_cols = [c.replace(prob_prefix, "", 1) for c in prob_cols]
+    import json
+    label_map_path = Path(in_csv).parent / "label_map.json"
+    code2label = {}
+    if label_map_path.exists():
+        lm = json.loads(label_map_path.read_text(encoding="utf-8"))
+        code2label = lm.get("code2label", {})
+
+    concept_cols = [
+        code2label.get(c.replace(prob_prefix, "", 1), c.replace(prob_prefix, "", 1))
+        for c in prob_cols
+    ]
     coded_df = pd.DataFrame(coded, columns=concept_cols)
 
     out_df = pd.concat([df[keep_cols].reset_index(drop=True), coded_df.reset_index(drop=True)], axis=1)

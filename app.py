@@ -14,9 +14,8 @@ from ena_tool import (
 st.set_page_config(page_title="ENA Pipeline", layout="wide")
 st.title("ENA End-to-End Pipeline")
 
-# ----------------------------
 # OpenAI API Key input
-# ----------------------------
+# TODO(self): Refactor API key handling to use session_state (avoid os.environ)
 st.sidebar.header("Input OpenAI API Key")
 
 openai_api_key = st.sidebar.text_input(
@@ -32,9 +31,8 @@ if openai_api_key:
 else:
     st.sidebar.warning("No API key set. Paradigm generation will not work.")
 
-# ----------------------------
 # 0) Session state for concepts
-# ----------------------------
+
 if "concepts" not in st.session_state:
     st.session_state["concepts"] = [
         {"code": "C1", "label": "Concept 1", "definition": ""},
@@ -45,43 +43,7 @@ st.write("Define concept labels → generate paradigms → train model → uploa
 
 st.divider()
 
-# ----------------------------
-# 1) Concept / Label editor
-# ----------------------------
-# st.header("1.Define concept labels (multiclass)")
 
-# with st.expander("Edit concepts", expanded=True):
-#     cols_header = st.columns([1, 2, 3, 1])
-#     cols_header[0].markdown("**Code**")
-#     cols_header[1].markdown("**Label**")
-#     cols_header[2].markdown("**Definition**")
-#     cols_header[3].markdown("**Remove**")
-
-#     for i, c in enumerate(st.session_state["concepts"]):
-#         cols = st.columns([1, 2, 3, 1])
-#         c["code"] = cols[0].text_input("", value=c.get("code", ""), key=f"code_{i}")
-#         c["label"] = cols[1].text_input("", value=c.get("label", ""), key=f"label_{i}")
-#         c["definition"] = cols[2].text_area("", value=c.get("definition", ""), key=f"def_{i}", height=80)
-#         if cols[3].button("Remove", key=f"del_{i}"):
-#             st.session_state["concepts"].pop(i)
-#             st.rerun()
-
-#     c1, c2 = st.columns([1, 3])
-#     if c1.button("Add concept"):
-#         st.session_state["concepts"].append({"code": "", "label": "", "definition": ""})
-#         st.rerun()
-
-# # Validate concepts
-# def _validate_concepts(concepts: list[dict]) -> list[str]:
-#     errs = []
-#     codes = [c.get("code", "").strip() for c in concepts]
-#     if any(not x for x in codes):
-#         errs.append("Some concept codes are empty.")
-#     if len(set(codes)) != len(codes):
-#         errs.append("Duplicate concept codes detected.")
-#     return errs
-
-# st.divider()
 st.header("1. Define concept labels (multiclass)")
 
 # init
@@ -179,9 +141,8 @@ with st.expander("Optional: manually tweak concepts", expanded=False):
             c["label"] = cols[1].text_input("label", value=c.get("label", ""), key=f"label_{i}")
             c["definition"] = cols[2].text_area("definition", value=c.get("definition", ""), key=f"def_{i}", height=80)
 
-# ----------------------------
+
 # 2) Generate paradigms + train model
-# ----------------------------
 st.header("2. Generate paradigms and train model")
 
 
@@ -261,6 +222,14 @@ st.divider()
 # ----------------------------
 # 3) Upload raw data + run full pipeline
 # ----------------------------
+if "pred_ready" not in st.session_state:
+    st.session_state.pred_ready = False
+if "tmp_pred" not in st.session_state:
+    st.session_state.tmp_pred = None
+if "tmp_ena" not in st.session_state:
+    st.session_state.tmp_ena = None
+if "prob_prefix" not in st.session_state:
+    st.session_state.prob_prefix = "p_"
 
 st.header("3. Upload raw data and run full pipeline")
 
@@ -291,7 +260,7 @@ if raw_file is not None:
         tmp_pred  = Path("data/_tmp_pred.csv")
         tmp_ena   = Path("data/_tmp_ena.csv")
 
-        # ===== Params =====
+        # Params 
         min_len_zh = 2
         min_len_en = 1
         pred_text_col = "text"
@@ -300,7 +269,7 @@ if raw_file is not None:
         st.write("CWD =", os.getcwd())
         st.write("Paths:", str(tmp_raw.resolve()), str(tmp_units.resolve()), str(tmp_pred.resolve()), str(tmp_ena.resolve()))
 
-        # ===== Step 1: Write raw =====
+        # Step 1: Write raw 
         tmp_raw.parent.mkdir(parents=True, exist_ok=True)
         raw_df.to_csv(tmp_raw, index=False, encoding="utf-8-sig")
         st.success(f"Step 1 OK: wrote raw -> {tmp_raw} ({len(raw_df)} rows)")
@@ -313,7 +282,7 @@ if raw_file is not None:
             st.error(f"text_col '{text_col}' is empty for all rows.")
             st.stop()
 
-        # ===== Step 2: Segmentation =====
+        # Step 2: Segmentation 
         with st.spinner("Step 2: Segmenting text..."):
             try:
                 segment_csv(
@@ -325,6 +294,8 @@ if raw_file is not None:
                     lang=seg_lang,
                     min_len_zh=min_len_zh,
                     min_len_en=min_len_en,
+                    keep_cols=None, 
+
                 )
             except Exception as e:
                 st.error(f"Segmentation failed: {e}")
@@ -347,7 +318,7 @@ if raw_file is not None:
             st.error(f"Units missing '{pred_text_col}' column. Existing: {list(df_units.columns)}")
             st.stop()
 
-        # ===== Step 3: Prediction =====
+        # Step 3: Prediction 
         with st.spinner("Step 3: Predicting concepts..."):
             try:
                 step_predict_multiclass(
@@ -373,20 +344,51 @@ if raw_file is not None:
             st.error(f"No probability columns found with prefix '{prob_prefix}'.")
             st.stop()
 
-        # ===== Step 4: Binarize for ENA =====
+
+        # Step 3 done
+        st.session_state.pred_ready = True
+        st.session_state.tmp_pred = str(tmp_pred)
+        st.session_state.tmp_ena  = str(tmp_ena)
+        st.session_state.prob_prefix = prob_prefix
+        st.success("Step 3 OK. Now select columns for Step 4 below.")
+
+        
+
+       # Step 4 UI & Run (outside the "Run full pipeline" button) 
+if st.session_state.pred_ready and st.session_state.tmp_pred:
+    tmp_pred = Path(st.session_state.tmp_pred)
+    tmp_ena  = Path(st.session_state.tmp_ena)
+    prob_prefix = st.session_state.prob_prefix
+
+    df_pred = pd.read_csv(tmp_pred)
+
+    st.subheader("Step 4: Binarize for ENA")
+    prob_cols = [c for c in df_pred.columns if c.startswith(prob_prefix)]
+    candidate_keep = [c for c in df_pred.columns if c not in prob_cols]
+
+    with st.form("ena_keepcols_form"):
+        keep_cols = st.multiselect(
+            "Keep columns in _tmp_ena.csv",
+            options=candidate_keep,
+            default=[],
+            help="Select columns to retain in the final ENA-coded output CSV.",
+        )
+        run_step4 = st.form_submit_button("Run Step 4: Binarize for ENA")
+
+    if run_step4:
+        if not keep_cols:
+            st.error("Please select at least one column to keep.")
+            st.stop()
+
         with st.spinner("Step 4: Binarizing for ENA..."):
-            try:
-                step_binarize_ena(
-                    in_csv=tmp_pred,
-                    out_csv=tmp_ena,
-                    keep_cols=[c for c in ["student_id", "__row_id", pred_text_col] if c in df_pred.columns],
-                    mode=mode,                  
-                    threshold=float(threshold),
-                    prob_prefix=prob_prefix,
-                )
-            except Exception as e:
-                st.error(f"ENA binarization failed: {e}")
-                st.stop()
+            step_binarize_ena(
+                in_csv=tmp_pred,
+                out_csv=tmp_ena,
+                keep_cols=keep_cols,
+                mode=mode,
+                threshold=float(threshold),
+                prob_prefix=prob_prefix,
+            )
 
         if not tmp_ena.exists():
             st.error("ENA binarization finished but tmp_ena was not created.")
@@ -402,3 +404,5 @@ if raw_file is not None:
             file_name="ena_output.csv",
             mime="text/csv",
         )
+else:
+    st.info("Run full pipeline first. After Step 3 completes, Step 4 will appear here.")

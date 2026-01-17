@@ -1,7 +1,0 @@
-student_id,__row_id,comment_body,text,lang,segment_id,unit_id
-s01,0,我們使用資料來分析。接著比較感測器規格！最後寫成報告。,我們使用資料來分析,zh,1,s01_0_1
-s01,0,我們使用資料來分析。接著比較感測器規格！最後寫成報告。,接著比較感測器規格,zh,2,s01_0_2
-s02,1,We used survey data. It worked! Dr. Smith agreed.,We used survey data,en,1,s02_1_1
-s02,1,We used survey data. It worked! Dr. Smith agreed.,It worked,en,2,s02_1_2
-s02,1,We used survey data. It worked! Dr. Smith agreed.,Dr. Smith agreed,en,3,s02_1_3
-s03,2,這是一個新的學生留言，用來測試斷句與ID。還有第二句。,這是一個新的學生留言，用來測試斷句與ID,zh,1,s03_2_1
