@@ -94,9 +94,10 @@ def segment_csv(
     min_len_zh: int,
     min_len_en: int,
     keep_cols: Optional[List[str]] = None,
+    pre_filter_min_chars: int = 0,
+    pre_filter_out_csv: Optional[Path] = None,
 ) -> None:
     df = pd.read_csv(in_csv)
-    # assert_has_usable_text(df, text_col)
 
     # 1) handle duplicated columns
     if df.columns.duplicated().any():
@@ -122,6 +123,31 @@ def segment_csv(
         )
     
     assert_has_usable_text(df, text_col)
+
+    df[text_col] = df[text_col].fillna("").astype(str)
+
+    if pre_filter_min_chars and pre_filter_min_chars > 0:
+        df["_raw_char_len"] = df[text_col].astype(str).str.strip().str.len()
+        df["_is_short_raw"] = df["_raw_char_len"] < int(pre_filter_min_chars)
+
+        df_short = df[df["_is_short_raw"]].copy()
+        df = df[~df["_is_short_raw"]].copy()
+
+        if pre_filter_out_csv is not None:
+            pre_filter_out_csv = Path(pre_filter_out_csv)
+            pre_filter_out_csv.parent.mkdir(parents=True, exist_ok=True)
+            df_short.to_csv(pre_filter_out_csv, index=False, encoding="utf-8-sig")
+
+    if df.empty:
+        out_csv = Path(out_csv)
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        base_cols = []
+        for c in (id_cols + ([group_col] if group_col else []) + ["__row_id", "text", "lang", "segment_id", "unit_id"]):
+            if c and c not in base_cols:
+                base_cols.append(c)
+        pd.DataFrame(columns=base_cols).to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"[STOP] All rows are short (<{pre_filter_min_chars}). Wrote empty units: {out_csv}")
+        return
 
     # 2) use row_id as unique row identifier
     if "__row_id" in df.columns:
