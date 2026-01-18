@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 import yaml
+import json, subprocess
+from pathlib import Path
+import subprocess
+import streamlit as st
 
 from ena_tool import (
     segment_csv,
@@ -15,7 +19,6 @@ st.set_page_config(page_title="ENA Pipeline", layout="wide")
 st.title("ENA End-to-End Pipeline")
 
 # OpenAI API Key input
-# TODO(self): Refactor API key handling to use session_state (avoid os.environ)
 st.sidebar.header("Input OpenAI API Key")
 
 openai_api_key = st.sidebar.text_input(
@@ -143,6 +146,8 @@ with st.expander("Optional: manually tweak concepts", expanded=False):
 
 
 # 2) Generate paradigms + train model
+
+
 st.header("2. Generate paradigms and train model")
 
 
@@ -219,11 +224,14 @@ if st.button("Generate paradigms + Train model"):
 
 st.divider()
 
-# ----------------------------
 # 3) Upload raw data + run full pipeline
-# ----------------------------
+
+#Init session state
 if "pred_ready" not in st.session_state:
     st.session_state.pred_ready = False
+if "ena_ready" not in st.session_state:
+    st.session_state.ena_ready = False
+
 if "tmp_pred" not in st.session_state:
     st.session_state.tmp_pred = None
 if "tmp_ena" not in st.session_state:
@@ -231,9 +239,17 @@ if "tmp_ena" not in st.session_state:
 if "prob_prefix" not in st.session_state:
     st.session_state.prob_prefix = "p_"
 
+if "mode" not in st.session_state:
+    st.session_state.mode = "top1"
+if "threshold" not in st.session_state:
+    st.session_state.threshold = 0.5
+
+############################################################################
+
 st.header("3. Upload raw data and run full pipeline")
 
 raw_file = st.file_uploader("Upload raw CSV (student_id + text)", type=["csv"])
+
 
 if raw_file is not None:
     raw_df = pd.read_csv(raw_file)
@@ -252,39 +268,90 @@ if raw_file is not None:
     mode = st.selectbox("Binarization mode", ["top1", "threshold"], index=0)
     threshold = st.slider("Threshold", 0.0, 1.0, 0.5, 0.01) if mode == "threshold" else 0.5
 
-    if st.button("Run full pipeline 🚀"):
+    #  Pre-seg filter UI (raw-level, immediate) 
+    st.subheader("Raw text audit (before pipeline)")
+    enable_pre_filter = st.checkbox("Filter short raw texts before segmentation", value=True)
+    min_chars_raw = st.number_input("Min chars (raw text)", min_value=0, value=20, step=1)
+
+    # Raw audit + hold-out (NO pipeline needed)
+    raw_df["_raw_text"] = raw_df[text_col].fillna("").astype(str).str.strip()
+    raw_df["_raw_char_len"] = raw_df["_raw_text"].str.len()
+
+    if enable_pre_filter and min_chars_raw > 0:
+        short_raw_df = raw_df[raw_df["_raw_char_len"] < int(min_chars_raw)].copy()
+        kept_raw_df  = raw_df[raw_df["_raw_char_len"] >= int(min_chars_raw)].copy()
+    else:
+        short_raw_df = raw_df.iloc[0:0].copy()
+        kept_raw_df  = raw_df.copy()
+
+    st.caption(f"Kept rows: {len(kept_raw_df)} | Held-out short rows: {len(short_raw_df)}")
+
+    with st.expander(f"Preview held-out short rows (< {int(min_chars_raw)} chars)", expanded=True):
+        show_cols = [c for c in [*id_cols, group_col, text_col, "_raw_char_len"] if c and c in short_raw_df.columns]
+        if not show_cols:
+            show_cols = [text_col, "_raw_char_len"]
+        st.dataframe(short_raw_df[show_cols].head(50))
+
+        st.download_button(
+            "Download short raw CSV",
+            data=short_raw_df.drop(columns=["_raw_text"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
+            file_name="short_raw.csv",
+            mime="text/csv",
+        )
+
+    # Store settings for Step 4 and pipeline
+    st.session_state["mode"] = mode
+    st.session_state["threshold"] = float(threshold)
+    st.session_state["raw_df_for_pipeline"] = kept_raw_df.drop(columns=["_raw_text"], errors="ignore")
+    st.session_state["short_raw_df"] = short_raw_df.drop(columns=["_raw_text"], errors="ignore")
+    st.session_state["enable_pre_filter"] = bool(enable_pre_filter)
+    st.session_state["min_chars_raw"] = int(min_chars_raw)
+
+if raw_file is not None:
+    
+    if st.button("Run full pipeline"):
         import os
+        from pathlib import Path
 
         tmp_raw   = Path("data/_tmp_raw.csv")
         tmp_units = Path("data/_tmp_units.csv")
         tmp_pred  = Path("data/_tmp_pred.csv")
         tmp_ena   = Path("data/_tmp_ena.csv")
 
-        # Params 
+        # Params
         min_len_zh = 2
         min_len_en = 1
         pred_text_col = "text"
         prob_prefix = "p_"
 
+        for p in [tmp_units, tmp_pred, tmp_ena]:
+            if p.exists():
+                p.unlink()
+
         st.write("CWD =", os.getcwd())
         st.write("Paths:", str(tmp_raw.resolve()), str(tmp_units.resolve()), str(tmp_pred.resolve()), str(tmp_ena.resolve()))
 
-        # Step 1: Write raw 
-        tmp_raw.parent.mkdir(parents=True, exist_ok=True)
-        raw_df.to_csv(tmp_raw, index=False, encoding="utf-8-sig")
-        st.success(f"Step 1 OK: wrote raw -> {tmp_raw} ({len(raw_df)} rows)")
+        raw_df_for_pipeline = st.session_state.get("raw_df_for_pipeline", raw_df)
 
-        if text_col not in raw_df.columns:
-            st.error(f"text_col '{text_col}' not found in raw_df columns: {list(raw_df.columns)}")
+        tmp_raw.parent.mkdir(parents=True, exist_ok=True)
+        raw_df_for_pipeline.to_csv(tmp_raw, index=False, encoding="utf-8-sig")
+        st.success(f"Step 1 OK: wrote raw -> {tmp_raw} ({len(raw_df_for_pipeline)} rows)")
+
+        if text_col not in raw_df_for_pipeline.columns:
+            st.error(f"text_col '{text_col}' not found in columns: {list(raw_df_for_pipeline.columns)}")
             st.stop()
 
-        if raw_df[text_col].fillna("").astype(str).str.strip().eq("").all():
-            st.error(f"text_col '{text_col}' is empty for all rows.")
+        if raw_df_for_pipeline[text_col].fillna("").astype(str).str.strip().eq("").all():
+            st.error(f"text_col '{text_col}' is empty for all rows after filtering.")
             st.stop()
 
         # Step 2: Segmentation 
+
         with st.spinner("Step 2: Segmenting text..."):
             try:
+                short_raw_path = Path("data/_tmp_short_raw.csv")
+                pre_min = int(st.session_state.get("min_chars_raw", 0))
+                pre_on  = bool(st.session_state.get("enable_pre_filter", False))    
                 segment_csv(
                     in_csv=tmp_raw,
                     out_csv=tmp_units,
@@ -294,12 +361,23 @@ if raw_file is not None:
                     lang=seg_lang,
                     min_len_zh=min_len_zh,
                     min_len_en=min_len_en,
-                    keep_cols=None, 
-
+                    keep_cols=None,
+                    pre_filter_min_chars=pre_min if pre_on else 0,
+                    pre_filter_out_csv=short_raw_path if pre_on else None,
                 )
             except Exception as e:
                 st.error(f"Segmentation failed: {e}")
                 st.stop()
+
+
+        if enable_pre_filter and short_raw_path.exists():
+            short_df = pd.read_csv(short_raw_path)
+            st.subheader(f"Short raw texts (< {int(min_chars_raw)} chars)")
+            st.write("Rows:", len(short_df))
+            st.dataframe(short_df.head(50))  
+            
+
+
 
         if not tmp_units.exists():
             st.error("Segmentation finished but tmp_units was not created.")
@@ -318,7 +396,7 @@ if raw_file is not None:
             st.error(f"Units missing '{pred_text_col}' column. Existing: {list(df_units.columns)}")
             st.stop()
 
-        # Step 3: Prediction 
+            # Step 3: Prediction 
         with st.spinner("Step 3: Predicting concepts..."):
             try:
                 step_predict_multiclass(
@@ -354,7 +432,7 @@ if raw_file is not None:
 
         
 
-       # Step 4 UI & Run (outside the "Run full pipeline" button) 
+# Step 4 UI & Run (outside the "Run full pipeline" button) 
 if st.session_state.pred_ready and st.session_state.tmp_pred:
     tmp_pred = Path(st.session_state.tmp_pred)
     tmp_ena  = Path(st.session_state.tmp_ena)
@@ -371,7 +449,7 @@ if st.session_state.pred_ready and st.session_state.tmp_pred:
             "Keep columns in _tmp_ena.csv",
             options=candidate_keep,
             default=[],
-            help="Select columns to retain in the final ENA-coded output CSV.",
+            key="step4_keep_cols",
         )
         run_step4 = st.form_submit_button("Run Step 4: Binarize for ENA")
 
@@ -385,14 +463,17 @@ if st.session_state.pred_ready and st.session_state.tmp_pred:
                 in_csv=tmp_pred,
                 out_csv=tmp_ena,
                 keep_cols=keep_cols,
-                mode=mode,
-                threshold=float(threshold),
+                mode=st.session_state.mode,
+                threshold=float(st.session_state.threshold),
                 prob_prefix=prob_prefix,
             )
 
         if not tmp_ena.exists():
             st.error("ENA binarization finished but tmp_ena was not created.")
             st.stop()
+
+        st.session_state.ena_ready = True
+        st.session_state.tmp_ena = str(tmp_ena)
 
         ena_df = pd.read_csv(tmp_ena)
         st.success(f"Step 4 OK: wrote ENA-coded -> {tmp_ena} ({len(ena_df)} rows)")
@@ -403,6 +484,224 @@ if st.session_state.pred_ready and st.session_state.tmp_pred:
             data=ena_df.to_csv(index=False).encode("utf-8-sig"),
             file_name="ena_output.csv",
             mime="text/csv",
+            key="download_ena_csv",
         )
+
+
+# Step 5: Build ENA set (.RData)
+
+
+OUT_DIR = Path("/Users/tiffanyhsu/Desktop/ENA/ena-tool/ena_outputs")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+if st.session_state.get("ena_ready") and st.session_state.get("tmp_ena"):
+    tmp_ena_path = Path(st.session_state.tmp_ena)
+
+    if not tmp_ena_path.exists():
+        st.warning("ENA-coded CSV not found. Please rerun Step 4.")
+        st.session_state.ena_ready = False
+        st.stop()
+
+    ena_df = pd.read_csv(tmp_ena_path)  
+    st.subheader("Step 5: Build ENA set (R)")
+
+    all_cols = list(ena_df.columns)
+
+    unitCols = st.multiselect(
+    "unitCols (units)",
+    options=all_cols,
+    default=[],
+    key="step5_unitCols",
+    help="Choose columns that uniquely identify a unit (e.g., UserID, Activity...)."
+    )
+
+    conversationCols = st.multiselect(
+    "conversationCols",
+    options=all_cols,
+    default=[],
+    key="step5_conversationCols",
+    )
+
+    window_size_back = st.number_input(
+    "window.size.back (co-occurrence window)",
+    min_value=1,
+    max_value=20,
+    value=2,
+    step=1,
+    key="step5_window"
+    )
+
+    groupsVar = st.selectbox(
+        "groupsVar",
+        options=["(none)"] + all_cols,
+        key="step5_groupsVar",
+    )
+
+    if groupsVar != "(none)" and groupsVar in ena_df.columns:
+        groups_options = sorted(ena_df[groupsVar].dropna().astype(str).unique().tolist())
+    else:
+        groups_options = []
+
+    groups = st.multiselect(
+        "groups (levels of groupsVar)",
+        options=groups_options,
+        key="step5_groups",
+    )
+
+    codesExclude = st.multiselect(
+    "Exclude columns from ENA codes (non-concept columns)",
+    options=all_cols,
+    default=[],
+    key="step5_codesExclude",
+    help="Select columns that should NOT be treated as ENA concept nodes."
+    )   
+
+    if len(codesExclude) == 0:
+        st.warning(
+            "You have not excluded any columns. "
+            "This means ALL columns will be treated as ENA codes. "
+            "Please confirm this is intentional."
+        )
+
+
+    cfg = {
+        "unitCols": unitCols,
+        "conversationCols": conversationCols,
+        "groupsVar": None if groupsVar == "(none)" else groupsVar,
+        "groups": groups,
+        "codesExclude": codesExclude,
+        "model": "EndPoint",
+        "window.size.back": int(window_size_back),
+        "weight.by": "$",
+        "object_name": "set.ena",
+    }
+
+    if st.button("Run Step 5: Build ENA set (.RData)", key="btn_step5_run"):
+        ena_csv_path = OUT_DIR / "ena_output_latest.csv"
+        ena_cfg_path = OUT_DIR / "ena_config_latest.json"
+        ena_rdata_path = OUT_DIR / "ena_set_latest.RData"
+
+        ena_df.to_csv(ena_csv_path, index=False, encoding="utf-8-sig")
+        ena_cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+        run_ena_path = Path(__file__).parent / "run_ena.R"
+
+        cmd = ["Rscript", str(run_ena_path), str(ena_csv_path), str(ena_rdata_path), str(ena_cfg_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+
+        if res.returncode != 0:
+            st.error("Rscript failed")
+            st.code(res.stderr)
+        else:
+            st.success("ENA set built successfully")
+            if res.stdout.strip():
+                st.code(res.stdout)
+
+            with open(ena_rdata_path, "rb") as f:
+                st.download_button(
+                    "Download ENA set (.RData)",
+                    data=f,
+                    file_name=ena_rdata_path.name,
+                    mime="application/octet-stream",
+                    key="dl_step5_rdata",
+                )
 else:
-    st.info("Run full pipeline first. After Step 3 completes, Step 4 will appear here.")
+    st.info("Run Step 4 first. After ENA-coded CSV is generated, Step 5 will appear here.")
+
+
+
+st.subheader("Step 6: Launch ENA3d (Shiny folder)")
+
+ena3d_dir = st.text_input(
+    "ENA3d folder path (must contain app.R)",
+    value="/Users/tiffanyhsu/Desktop/ENA/ena-tool/ENA_3D/R",
+    key="ena3d_dir",
+)
+
+port = st.number_input(
+    "Port",
+    min_value=1024,
+    max_value=65535,
+    value=3838,
+    step=1,
+    key="ena3d_port",
+)
+
+
+
+app_r = Path(ena3d_dir) / "app.R"
+if not app_r.exists():
+    st.error(f"Cannot find app.R：{app_r}\nPlease check the ENA3d folder path.")
+    st.stop()
+
+launch_r = Path(ena3d_dir) / "launch_shiny_app.R"
+
+if "ena3d_proc" not in st.session_state:
+    st.session_state.ena3d_proc = None
+if "ena3d_last_stdout" not in st.session_state:
+    st.session_state.ena3d_last_stdout = ""
+if "ena3d_last_stderr" not in st.session_state:
+    st.session_state.ena3d_last_stderr = ""
+
+col1, col2, col3 = st.columns([1, 1, 2])
+
+def proc_is_running(p):
+    return (p is not None) and (p.poll() is None)
+
+with col1:
+    if st.button("Launch ENA3d", key="btn_launch_ena3d"):
+        if not Path(ena3d_dir).exists():
+            st.error(f"Folder not found: {ena3d_dir}")
+        elif not launch_r.exists():
+            st.error(f"launch_shiny_app.R not found: {launch_r}")
+        else:
+            proc = st.session_state.ena3d_proc
+            if proc_is_running(proc):
+                st.warning("ENA3d is already running.")
+            else:
+                cmd = ["Rscript", str(launch_r), ena3d_dir, str(int(port))]
+                st.session_state.ena3d_proc = subprocess.Popen(
+                    cmd,
+                    cwd=ena3d_dir,  
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                st.success("ENA3d launched.")
+
+with col2:
+    if st.button("Stop ENA3d", key="btn_stop_ena3d"):
+        proc = st.session_state.ena3d_proc
+        if proc_is_running(proc):
+            proc.terminate()
+            st.success("ENA3d stopped.")
+        else:
+            st.info("ENA3d is not running.")
+
+with col3:
+    proc = st.session_state.ena3d_proc
+    if proc_is_running(proc):
+        st.markdown("**Status:** Running")
+    else:
+        st.markdown("**Status:** Stopped")
+
+st.write(f"Open ENA3d: http://127.0.0.1:{int(port)}")
+
+# Show logs (help you debug immediately)
+with st.expander("ENA3d logs (stdout/stderr)", expanded=False):
+    proc = st.session_state.ena3d_proc
+    if proc is None:
+        st.caption("No process started yet.")
+    else:
+        # Read whatever is currently available (non-blocking-ish for small output)
+        try:
+            if proc.stdout:
+                st.session_state.ena3d_last_stdout += proc.stdout.read() or ""
+            if proc.stderr:
+                st.session_state.ena3d_last_stderr += proc.stderr.read() or ""
+        except Exception:
+            pass
+
+        st.text_area("stdout", st.session_state.ena3d_last_stdout, height=150, key="ena3d_stdout")
+        st.text_area("stderr", st.session_state.ena3d_last_stderr, height=150, key="ena3d_stderr")
