@@ -208,30 +208,14 @@ Folder Structure
 ena-tool/
 ├── app.py
 ├── ena_tool.py
+├── run_ena.R
+├── ena_functions.R
+├── test_paradigms.py
 ├── README.md
-├── requirements.txt
-├── .gitignore
-├── .streamlit/
-│   └── config.toml
-├── data/
-│   ├── _tmp_raw.csv
-│   ├── _tmp_short_raw.csv
-│   ├── _tmp_units.csv
-│   ├── _tmp_pred.csv
-│   └── _tmp_ena.csv
-├── models/
-│   └── <model_dir>/
-│       ├── label_map.json
-│       └── (HF model files...)
-├── r/
-│   ├── run_ena.R
-│   ├── ena_functions.R
-│   └── launch_shiny_app.R
-├── outputs/
-│   ├── ena_output_latest.csv
-│   ├── ena_config_latest.json
-│   └── ena_set_latest.RData
-└── data_structure.md
+├── schemas/
+├── data_in/
+├── data_out/
+└── R/
 
 ```
 ⸻
