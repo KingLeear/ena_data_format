@@ -1,11 +1,18 @@
 # ENA End-to-End Pipeline (Streamlit)
 
-### This project provides a full end-to-end pipeline for:
-	1.	Uploading concept definitions
-	2.	Generating paradigms using OpenAI
-	3.	Training a multiclass classifier (BERT / RoBERTa)
-	4.	Uploading raw student text
-	5.	Running segmentation → prediction → ENA binarization → exporting ENA-coded CSV
+This repository provides an end-to-end pipeline for transforming raw student text into ENA-ready binary matrices, supporting segmentation, concept prediction, and network analysis.
+
+## Overview
+
+The pipeline supports the following workflow:
+	1.	Upload raw textual data (CSV)
+	2.	Segment text into analysis units (sentences)
+	3.	Train or load a multiclass concept classifier
+	4.	Generate concept predictions
+	5.	Binarize predictions for ENA
+	6.	Export ENA-ready data for network analysis
+
+The system is designed for educational discourse analysis, particularly for epistemic or conceptual coding.
 
 ⸻
 
@@ -198,14 +205,14 @@ Check:
 Folder Structure
 
 .
-├── app.py
-├── ena_tool.py
+├── app.py                # Streamlit UI
+├── ena_tool.py           # Core pipeline functions
 ├── data/
-│   ├── _tmp_raw.csv
-│   ├── _tmp_units.csv
-│   ├── _tmp_pred.csv
-│   └── _tmp_ena.csv
-└── model_out/
+│   ├── _tmp_raw.csv      # Uploaded raw data
+│   ├── _tmp_units.csv    # Segmented text units
+│   ├── _tmp_pred.csv     # Concept prediction probabilities
+│   └── _tmp_ena.csv      # ENA-ready binary matrix
+└── model_out/            # Trained model checkpoints
 
 
 ⸻
