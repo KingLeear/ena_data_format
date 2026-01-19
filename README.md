@@ -204,6 +204,7 @@ Check:
 
 Folder Structure
 
+```
 ena-tool/
 ├── app.py
 ├── ena_tool.py
@@ -232,7 +233,7 @@ ena-tool/
 │   └── ena_set_latest.RData
 └── data_structure.md
 
-
+```
 ⸻
 
 Notes
